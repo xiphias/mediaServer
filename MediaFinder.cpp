@@ -81,17 +81,39 @@ Media_Finder::OnMRStateVariablesChanged(PLT_Service*  service, NPT_List<PLT_Stat
 		while (item) {
 			name = (*item)->GetName();
 			value = (*item)->GetValue();
-			//if(name == "Mute" || name == "Volume" || name == "TransportState"){
-				EventInfo* newEvent = new EventInfo;
-				newEvent->Name = name;
-				newEvent->Value = value;
-				newEvent->UUID = service->GetDevice()->GetUUID();
-				NPT_AutoLock lockEvnt(cBaton->m_EventStack);
-				cBaton->m_EventStack.Push(*newEvent);
-				cBaton->hasChanged.SetValue(1);
-			//}
+			EventInfo* newEvent = new EventInfo;
+			newEvent->Name = name;
+			newEvent->Value = value;
+			newEvent->UUID = service->GetDevice()->GetUUID();
+            newEvent->SourceType = RENDERER;
+			NPT_AutoLock lockEvnt(cBaton->m_EventStack);
+			cBaton->m_EventStack.Push(*newEvent);
+			cBaton->hasChanged.SetValue(1);
 			item++;
 		}
+}
+
+/*----------------------------------------------------------------------
+|   Media_Finder::OnMSStateVariablesChanged
++---------------------------------------------------------------------*/
+void 
+Media_Finder::OnMSStateVariablesChanged(PLT_Service*  service, NPT_List<PLT_StateVariable*>*  vars){
+        NPT_LOG_INFO("SERVICE TYPE ="+ service->GetServiceType());
+        NPT_List<PLT_StateVariable*>::Iterator item = vars->GetFirstItem();
+        NPT_String name, value;
+        while (item) {
+            name = (*item)->GetName();
+            value = (*item)->GetValue();
+            EventInfo* newEvent = new EventInfo;
+            newEvent->Name = name;
+            newEvent->Value = value;
+            newEvent->UUID = service->GetDevice()->GetUUID();
+            newEvent->SourceType = SERVER;
+            NPT_AutoLock lockEvnt(cBaton->m_EventStack);
+            cBaton->m_EventStack.Push(*newEvent);
+            cBaton->hasChanged.SetValue(1);
+            item++;
+        }
 }
 
 
@@ -130,10 +152,15 @@ Media_Finder::OnMSAdded(PLT_DeviceDataReference& device)
 	NPT_AutoLock lockEvnt(cBaton->m_EventStack);
 	cBaton->m_DeviceStack.Push(device->GetUUID());
 
-	EventInfo* newEvent = new EventInfo;
-	newEvent->Name = "msAdd";
-	newEvent->UUID = device->GetUUID();
-	cBaton->m_EventStack.Push(*newEvent);
+	EventInfo newEvent;
+    ServerInfo* server = new ServerInfo;
+    server->iconUrl = device->GetIconUrl();
+    server->baseUrl = device->GetURLBase().ToString();
+    newEvent.userData = server;
+	newEvent.Name = "serverAdded";
+	newEvent.UUID = device->GetUUID();
+    newEvent.Value = device->GetFriendlyName();
+	cBaton->m_EventStack.Push(newEvent);
 	cBaton->hasChanged.SetValue(1);
 
     return true; 
@@ -153,11 +180,11 @@ Media_Finder::OnMRAdded(PLT_DeviceDataReference& device)
         NPT_AutoLock lock(m_MediaRenderers);
         m_MediaRenderers.Put(uuid, device);
 				NPT_AutoLock lockEvnt(cBaton->m_EventStack);
-				EventInfo* newEvent = new EventInfo;
-				newEvent->Name = "mrAdd";
-				newEvent->UUID = device->GetUUID();
-				newEvent->Value = device->GetFriendlyName();
-				cBaton->m_EventStack.Push(*newEvent);
+				EventInfo newEvent;
+				newEvent.Name = "rendererAdded";
+				newEvent.UUID = device->GetUUID();
+				newEvent.Value = device->GetFriendlyName();
+				cBaton->m_EventStack.Push(newEvent);
 				cBaton->hasChanged.SetValue(1);
     }
     
@@ -175,6 +202,13 @@ Media_Finder::OnMRRemoved(PLT_DeviceDataReference& device)
     {
         NPT_AutoLock lock(m_MediaRenderers);
         m_MediaRenderers.Erase(uuid);
+        NPT_AutoLock lockEvnt(cBaton->m_EventStack);
+        EventInfo newEvent;
+        newEvent.Name = "rendererRemoved";
+        newEvent.UUID = device->GetUUID();
+        newEvent.Value = device->GetFriendlyName();
+        cBaton->m_EventStack.Push(newEvent);
+        cBaton->hasChanged.SetValue(1);
     }
 
     {
@@ -185,6 +219,24 @@ Media_Finder::OnMRRemoved(PLT_DeviceDataReference& device)
             m_CurMediaRenderer = NULL;
         }
     }
+}
+
+/*----------------------------------------------------------------------
+|   Media_Finder::OnMSRemoved
++---------------------------------------------------------------------*/
+void
+Media_Finder::OnMSRemoved(PLT_DeviceDataReference& device)
+{
+    NPT_String uuid = device->GetUUID();
+    NPT_AutoLock lock(m_MediaRenderers);
+    m_MediaRenderers.Erase(uuid);
+    NPT_AutoLock lockEvnt(cBaton->m_EventStack);
+    EventInfo newEvent;
+    newEvent.Name = "serverRemoved";
+    newEvent.UUID = device->GetUUID();
+    newEvent.Value = device->GetFriendlyName();
+    cBaton->m_EventStack.Push(newEvent);
+    cBaton->hasChanged.SetValue(1);
 }
 
 NPT_Result
@@ -253,7 +305,7 @@ Media_Finder::getDeviceReference(NPT_String UUID){
 }
 
 NPT_Result
-Media_Finder::DoSearch(NPT_String UUID,NPT_String searchCriteria, PLT_MediaObjectListReference& resultList){
+Media_Finder::DoSearch(NPT_String UUID,const char* object_id, PLT_MediaObjectListReference& resultList){
 	NPT_Result res = NPT_FAILURE;
     PLT_DeviceDataReference device;
     device = getDeviceReference(UUID);
@@ -271,7 +323,7 @@ Media_Finder::DoSearch(NPT_String UUID,NPT_String searchCriteria, PLT_MediaObjec
 
 	res = BrowseSync(
             device, 
-            "1$268435466", 
+            object_id, 
             resultList, 
             false,
 		0);		
@@ -279,70 +331,123 @@ Media_Finder::DoSearch(NPT_String UUID,NPT_String searchCriteria, PLT_MediaObjec
 	return res;
 
 }
-void
+
+NPT_Result
+Media_Finder::DoBrowse(NPT_String UUID,const char* object_id, PLT_MediaObjectListReference& resultList)
+{
+    NPT_Result res = NPT_FAILURE;
+    PLT_DeviceDataReference* device = NULL;
+    GetMediaServersMap().Get(UUID, device);
+    if (device) {
+
+        // send off the browse packet and block
+        res = BrowseSync(
+            *device,
+            object_id,
+            resultList,
+            false);
+    }
+
+    return res;
+}
+
+NPT_Result
 Media_Finder::Mute(bool value, PLT_BrowseData* status)
 {
     PLT_DeviceDataReference device;
     GetCurMR(device);
     if (!device.IsNull()) {
-        SetMute(device, 0, "Master", value, status);
+        return SetMute(device, 0, "Master", value, status);
     }else{
 				status->res = -1;
 				status->shared_var.SetValue(1);
 		}
+    return NPT_FAILURE;
 }
 
-void
+NPT_Result
 Media_Finder::Volume(int value, PLT_BrowseData* status)
 {
     PLT_DeviceDataReference device;
     GetCurMR(device);
     if (!device.IsNull()) {
-        SetVolume(device, 0, "Master", value, status);
+        return SetVolume(device, 0, "Master", value, status);
     }else{
 				status->res = -1;
 				status->shared_var.SetValue(1);
 		}
+    return NPT_FAILURE;
 }
 
 
-void
+NPT_Result
 Media_Finder::PauseTrack(PLT_BrowseData* status)
 {
     PLT_DeviceDataReference device;
     GetCurMR(device);
     if (!device.IsNull()) {
-        Pause(device, 0, status);
+        return Pause(device, 0, status);
     }else{
 				status->res = -1;
 				status->shared_var.SetValue(1);
 		}
+    return NPT_FAILURE;
 }
 
-void
+NPT_Result
 Media_Finder::StopTrack(PLT_BrowseData* status)
 {
     PLT_DeviceDataReference device;
     GetCurMR(device);
     if (!device.IsNull()) {
-        Stop(device, 0, status);
+        return Stop(device, 0, status);
     }else if(status != NULL){
 				status->res = -1;
 				status->shared_var.SetValue(1);
 		}
+    return NPT_FAILURE;
 }
 
-void
+NPT_Result
+Media_Finder::GetPosition(Position_data* status)
+{
+    PLT_DeviceDataReference device;
+    GetCurMR(device);
+    if (!device.IsNull()) {
+        return GetPositionInfo(device, 0, status);
+    }else if(status != NULL){
+        status->res = -1;
+        status->shared_var.SetValue(1);
+    }
+    return NPT_FAILURE;
+}
+
+NPT_Result
+Media_Finder::SetPosition(PLT_BrowseData* status, NPT_String target)
+{
+    PLT_DeviceDataReference device;
+    GetCurMR(device);
+    if (!device.IsNull()) {
+        return Seek(device, 0,"REL_TIME",target, status);
+    }else if(status != NULL){
+        status->res = -1;
+        status->shared_var.SetValue(1);
+    }
+    return NPT_FAILURE;
+}
+
+NPT_Result
 Media_Finder::GetTrackInfo(Info_data* status)
 {
     PLT_DeviceDataReference device;
     GetCurMR(device);
     if (!device.IsNull()) {
-        GetMediaInfo(device, 0, status);
+        return GetMediaInfo(device, 0, status);
     }else{
         status->res = -1;
         status->shared_var.SetValue(1);
     }
+    return NPT_FAILURE;
 }
 
 void 
@@ -362,21 +467,35 @@ Media_Finder::OnGetMediaInfoResult(NPT_Result               res,
     (*data).shared_var.SetValue(1);
     NPT_LOG_INFO("set data");
 
-
 };
 
-void
+void 
+Media_Finder::OnGetPositionInfoResult(NPT_Result               res, 
+                               PLT_DeviceDataReference& device,
+                               PLT_PositionInfo*           info,
+                               void*                    userdata)
+{
+    NPT_LOG_FINE("position data received");
+    NPT_COMPILER_UNUSED(device);
+    if (!userdata) return;
+    Position_data* data = (Position_data*) userdata;
+    (*data).res = res;
+    (*data).info = (*info);
+    (*data).shared_var.SetValue(1);
+};
+
+NPT_Result
 Media_Finder::PlayTrack(PLT_BrowseData* status)
 {
     PLT_DeviceDataReference device;
     GetCurMR(device);
     if (!device.IsNull()) {
-        Play(device, 0, "1", status);
+        return Play(device, 0, "1", status);
     }else if(status != NULL){
 				status->res = -1;
 				status->shared_var.SetValue(1);
 		}
-			//	GetMediaInfo(device, 0, NULL);
+		return NPT_FAILURE;
 }
 
 NPT_Result

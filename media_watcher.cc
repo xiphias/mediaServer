@@ -31,6 +31,9 @@ class GetTracks;
 class GetMediaInfo;
 class WatchEvents;
 class Pause;
+class BrowseDirectory;
+class GetMediaPosition;
+class SetPosition;
 
 template <class Wrap>
 static Handle<Value> Action(const Arguments& args){
@@ -71,7 +74,10 @@ public:
     NODE_SET_PROTOTYPE_METHOD(s_ct, "setRenderer", SetRenderer);
     NODE_SET_PROTOTYPE_METHOD(s_ct, "watchEvents", Action<WatchEvents>);
     NODE_SET_PROTOTYPE_METHOD(s_ct, "getTracks", Action<GetTracks>);
+    NODE_SET_PROTOTYPE_METHOD(s_ct, "doBrowse", Action<BrowseDirectory>);
     NODE_SET_PROTOTYPE_METHOD(s_ct, "getMediaInfo", Action<GetMediaInfo>);
+    NODE_SET_PROTOTYPE_METHOD(s_ct, "seek", Action<SetPosition>);
+    NODE_SET_PROTOTYPE_METHOD(s_ct, "getPosition", Action<GetMediaPosition>);
     NODE_SET_PROTOTYPE_METHOD(s_ct, "stop", Action<Stop>);
     NODE_SET_PROTOTYPE_METHOD(s_ct, "pause", Action<Pause>);
     NODE_SET_PROTOTYPE_METHOD(s_ct, "play", Action<Play>);
@@ -189,14 +195,23 @@ public:
     MediaWatcher* mw = ObjectWrap::Unwrap<MediaWatcher>(args.This());
     mw->watchInfo->m_EventStack.Lock();
     EventInfo ev;
+
     if(NPT_SUCCEEDED(mw->watchInfo->m_EventStack.Pop(ev))){
 			mw->watchInfo->m_EventStack.Unlock();
 			Local<Object> result = Object::New();
 			NPT_LOG_INFO("HERE");
 			NPT_LOG_INFO(ev.Name);
+      if(ev.Name.Compare("serverAdded") == 0){
+        ServerInfo* server = (ServerInfo*) ev.userData;
+        V8_SET(result,"iconUrl",server->iconUrl);
+        V8_SET(result,"baseUrl",server->baseUrl);
+        V8_SET(result,"nameTest",ev.Name);
+        delete server;
+      }
 		  V8_SET(result,"name",ev.Name);
 			V8_SET(result,"value",ev.Value);
 			V8_SET(result,"uuid",ev.UUID);
+      result->Set(String::New("sourceType"),(ev.SourceType == RENDERER) ? String::New("renderer") : String::New("server"));
 			return scope.Close(result);
     }
     else{
@@ -209,18 +224,17 @@ public:
 
   static Handle<Value> GetServer(const Arguments& args){
     HandleScope scope;
-
     MediaWatcher* mw = ObjectWrap::Unwrap<MediaWatcher>(args.This());
     mw->watchInfo->m_DeviceStack.Lock();
     NPT_String device;
     if(NPT_SUCCEEDED(mw->watchInfo->m_DeviceStack.Pop(device))){
-	mw->watchInfo->m_DeviceStack.Unlock();
-	Handle<String> UUID = String::New((char*)device,device.GetLength());
-	return scope.Close(UUID);
+    	mw->watchInfo->m_DeviceStack.Unlock();
+    	Handle<String> UUID = String::New((char*)device,device.GetLength());
+    	return scope.Close(UUID);
     }
     else{
-	mw->watchInfo->m_DeviceStack.Unlock();
-	return False();//no more devices
+	    mw->watchInfo->m_DeviceStack.Unlock();
+	    return False();//no more devices
     }
   }
 
@@ -315,6 +329,16 @@ protected:
 			FatalException(try_catch);
 		}
   }
+  void CallOnComplete(Local<Value> arg1,Local<Value> arg2) {
+    HandleScope scope;
+    Local<Value> argv[2] = {arg1,arg2};
+
+    TryCatch try_catch;
+    cb->Call(Context::GetCurrent()->Global(), 1, argv);
+    if (try_catch.HasCaught()) {
+      FatalException(try_catch);
+    }
+  }
 
 };
 
@@ -337,12 +361,12 @@ private:
     NPT_LOG_INFO("START STOP");
 		PLT_BrowseData playInfo;
 		playInfo.shared_var.SetValue(0);
-		controller->StopTrack(NULL);
-		//playInfo.shared_var.WaitUntilEquals(1);
-		//res = playInfo.res;
-    res = 0;
-
-
+		if(NPT_SUCCEEDED(controller->StopTrack(&playInfo))){
+      playInfo.shared_var.WaitUntilEquals(1);
+      res = playInfo.res;
+    }else{
+      res = NPT_FAILURE;
+    }
 	}
 	void After(){ 
 		NPT_LOG_INFO("After stop");
@@ -366,10 +390,12 @@ private:
 	void ThreadTask(){
 		PLT_BrowseData playInfo;
 		playInfo.shared_var.SetValue(0);
-		controller->Volume(value, &playInfo);
-		playInfo.shared_var.WaitUntilEquals(1);
-		res = playInfo.res;
-
+		if(NPT_SUCCEEDED(controller->Volume(value, &playInfo))){
+  		playInfo.shared_var.WaitUntilEquals(1);
+  		res = playInfo.res;
+    }else{
+      res = NPT_FAILURE;
+    }
 
 	}
 	void After(){ 
@@ -393,11 +419,12 @@ private:
 	void ThreadTask(){
 		PLT_BrowseData playInfo;
 		playInfo.shared_var.SetValue(0);
-		controller->Mute(value, &playInfo);
-		playInfo.shared_var.WaitUntilEquals(1);
-		res = playInfo.res;
-
-
+		if(NPT_SUCCEEDED(controller->Mute(value, &playInfo))){
+  		playInfo.shared_var.WaitUntilEquals(1);
+  		res = playInfo.res;
+    }else{
+      res = NPT_FAILURE;
+    }
 	}
 	void After(){ 
 		if(NPT_SUCCEEDED(res))
@@ -412,11 +439,12 @@ private:
 	void ThreadTask(){
 		PLT_BrowseData playInfo;
 		playInfo.shared_var.SetValue(0);
-		controller->PauseTrack(&playInfo);
-		playInfo.shared_var.WaitUntilEquals(1);
-		res = playInfo.res;
-
-
+		if(NPT_SUCCEEDED(controller->PauseTrack(&playInfo))){
+      playInfo.shared_var.WaitUntilEquals(1);
+      res = playInfo.res;
+    }else{
+      res = NPT_FAILURE;
+    }
 	}
 	void After(){ 
 		if(NPT_SUCCEEDED(res))
@@ -432,11 +460,12 @@ private:
 	void ThreadTask(){
 		PLT_BrowseData playInfo;
 		playInfo.shared_var.SetValue(0);
-		controller->PlayTrack(NULL);
-    //  &playInfo);
-		//playInfo.shared_var.WaitUntilEquals(1);
-		//res = playInfo.res;
-    res = 0;
+		if(NPT_SUCCEEDED(controller->PlayTrack(&playInfo))){
+      playInfo.shared_var.WaitUntilEquals(1);
+      res = playInfo.res;
+    }else{
+      res = NPT_FAILURE;
+    }
 	}
 	void After(){ 
 		NPT_LOG_INFO("After play");
@@ -489,9 +518,10 @@ private:
 	void ThreadTask(){ 
 		PLT_BrowseData playInfo;
 	  playInfo.shared_var.SetValue(0);
-		if(NPT_SUCCEEDED(controller->OpenTrack(*resource, *Didl, &playInfo)))
+		if(NPT_SUCCEEDED(controller->OpenTrack(*resource, *Didl, &playInfo))){
 			playInfo.shared_var.WaitUntilEquals(1);
-    else{
+      res = playInfo.res;
+    }else{
 			res = NPT_FAILURE;
 	  }
 	}
@@ -519,10 +549,35 @@ private:
     info = playInfo.info;
   }
   void After(){ 
-    NPT_LOG_INFO("After stop");
+    NPT_LOG_INFO("After GetMediaInfo");
     if(NPT_SUCCEEDED(res)){
       Local<Object> resObj = Object::New();
       V8_SET(resObj,"uri",info.cur_uri);
+      CallOnComplete(resObj);
+    }else{
+      CallOnComplete(Local<Boolean>::New(Boolean::New(false)));
+    }
+  }
+};
+
+class GetMediaPosition : public QueryWrap{
+public:
+  PLT_PositionInfo info;
+private:
+  void ThreadTask(){
+    Position_data playInfo;
+    playInfo.shared_var.SetValue(0);
+    controller->GetPosition(&playInfo);
+    playInfo.shared_var.WaitUntilEquals(1,30000);
+    res = playInfo.res;
+    info = playInfo.info;
+  }
+  void After(){ 
+    NPT_LOG_INFO("After get position");
+    if(NPT_SUCCEEDED(res)){
+      Local<Object> resObj = Object::New();
+      resObj->Set(String::New("position"), Number::New(info.rel_time.ToMillis()));
+      resObj->Set(String::New("duration"), Number::New(info.track_duration.ToMillis()));
       CallOnComplete(resObj);
     }else{
       CallOnComplete(Local<Boolean>::New(Boolean::New(false)));
@@ -535,6 +590,7 @@ class GetTracks : public QueryWrap{
 private:
 	NPT_Array<PLT_MediaItemResource> *resource;
 	NPT_String UUID;
+  NPT_String dirID;
 	PLT_MediaObjectListReference tracks;
 
   //return an array of objects that contain a uri, and a protocol string
@@ -555,10 +611,11 @@ private:
 	void SetupBaton(const Arguments& args){
 		NPT_LOG_INFO("start get tracks");
     UUID = *String::AsciiValue(args[1]);
+    dirID = *String::AsciiValue(args[2]);
 	}
 	void ThreadTask(){ 
    NPT_LOG_INFO("fire get tracks ");
-   res = controller->DoSearch(UUID,"*",tracks);
+   res = controller->DoSearch(UUID,dirID,tracks);
 	}
 	void After(){
 		HandleScope scopeTest;
@@ -575,10 +632,16 @@ private:
 		 		temp->Set(String::New("Resources"),wrapResources(&(*item)->m_Resources));
 			  V8_SET(temp,"Didl",(*item)->m_Didl);
 				V8_SET(temp,"Title",(*item)->m_Title);
-				V8_SET(temp,"Artist",(*item)->m_People.artists.GetFirstItem()->name);
+        NPT_List<PLT_PersonRole>::Iterator person = (*item)->m_People.artists.GetFirstItem();
+        if(person){
+				  V8_SET(temp,"Artist",(*item)->m_People.artists.GetFirstItem()->name);
+        }else{
+          temp->Set(String::New("Artist"),String::New("unknown"));
+        }
 				V8_SET(temp,"Album",(*item)->m_Affiliation.album);
 				temp->Set(String::New("TrackNumber"),Integer::New((*item)->m_MiscInfo.original_track_number));
-				//temp->Set(String::New("TrackNumber"),Str::New((*item)->m_ObjectID));
+				
+        //temp->Set(String::New("TrackNumber"),Str::New((*item)->m_ObjectID));
 				V8_SET(temp,"oID",(*item)->m_ObjectID);
 
 		 		//add a copy of the temp object into our array
@@ -599,6 +662,73 @@ private:
 	}
 };
 
+
+class SetPosition : public QueryWrap{
+private:
+  NPT_String target;
+
+  void SetupBaton(const Arguments& args){
+    target = *String::AsciiValue(args[1]);
+  }
+  void ThreadTask(){
+    PLT_BrowseData playInfo;
+    playInfo.shared_var.SetValue(0);
+    if(NPT_SUCCEEDED(controller->SetPosition(&playInfo,target))){
+      playInfo.shared_var.WaitUntilEquals(1,30000);
+      res = playInfo.res;
+    }else{
+      res = NPT_FAILURE;
+    }
+  }
+  void After(){ 
+    NPT_LOG_INFO("After set position");
+    if(NPT_SUCCEEDED(res))
+      CallOnComplete(Local<Boolean>::New(Boolean::New(true)));
+    else
+      CallOnComplete(Local<Boolean>::New(Boolean::New(false)));
+  }
+};
+
+
+class BrowseDirectory : public QueryWrap{
+private:
+  PLT_MediaObjectListReference browseResults;
+  NPT_String UUID;
+  NPT_String dirID;
+
+
+  void SetupBaton(const Arguments& args){
+    UUID = *String::AsciiValue(args[1]);
+    dirID = *String::AsciiValue(args[2]);
+  }
+  void ThreadTask(){ 
+   res = controller->DoBrowse(UUID,dirID,browseResults);
+  }
+  void After(){
+    HandleScope scopeTest;
+    if(NPT_SUCCEEDED(res)){
+      Local<Array> dirArray = Array::New();
+
+      if(!browseResults.IsNull()){
+        NPT_List<PLT_MediaObject*>::Iterator item = browseResults->GetFirstItem();
+        int i =0;
+        while (item) {
+           Local<Object> temp = Object::New();
+            V8_SET(temp,"_id",(*item)->m_ObjectID);
+            V8_SET(temp,"Title",(*item)->m_Title);
+            temp->Set(String::New("isContainer"),Boolean::New((*item)->IsContainer()));
+            dirArray->Set(i++,temp);
+            ++item;
+        }
+      }
+      CallOnComplete(dirArray,String::New(UUID));
+    }else{
+      NPT_LOG_INFO("fail");
+      CallOnComplete(Local<Boolean>::New(Boolean::New(false)));
+    }
+  }
+};
+
 class OpenNext : public QueryWrap{
 private:
 	NPT_Array<PLT_MediaItemResource> *resource;
@@ -613,9 +743,10 @@ private:
 		//Open* newSelf = (Open*) this;
 		PLT_BrowseData playInfo;
 	  playInfo.shared_var.SetValue(0);
-		if(NPT_SUCCEEDED(controller->OpenNextTrack(*resource, *Didl, &playInfo)))
+		if(NPT_SUCCEEDED(controller->OpenNextTrack(*resource, *Didl, &playInfo))){
 			playInfo.shared_var.WaitUntilEquals(1);
-    else{
+      res = playInfo.res;
+    }else{
 			res = NPT_FAILURE;
 	  }
 	}
