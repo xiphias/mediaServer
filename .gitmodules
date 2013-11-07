@@ -1,0 +1,3 @@
+[submodule "Platinum"]
+	path = Platinum
+	url = git@github.com:badfortrains/Platinum.git
