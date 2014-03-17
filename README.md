@@ -17,3 +17,4 @@ Go to Platinum/Platinum, build Platinum with scons
 sudo npm install -g node-gyp
 
 ./build.sh
+node t.js
