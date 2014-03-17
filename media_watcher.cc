@@ -8,6 +8,7 @@
 #include "MediaFinder.h"
 #include "Neptune.h"
 #include <unistd.h>
+#include "V8MediaServer.h"
 
 using namespace node;
 using namespace v8;
@@ -757,12 +758,74 @@ private:
 			CallOnComplete(String::New("Open Next Failed"));
 	}
 };
-
-extern "C" {
+/*
   static void init (Handle<Object> target)
   {
     MediaWatcher::Init(target);
-  }
+  }*/
+
+Handle<Value> RunCallback(const Arguments& args) {
+  HandleScope scope;
+
+  Local<Object> o = Local<Object>::Cast(args[0]);
+
+    // setup Neptune logging
+    NPT_LogManager::GetDefault().Configure("plist:.level=INFO;.handlers=ConsoleHandler;.ConsoleHandler.colors=off;.ConsoleHandler.filter=42");
+
+	/* for DLNA faster testing */
+	//PLT_Constants::GetInstance().m_DefaultDeviceLease = 30.;
+
+    Local<String> v = Local<String>::Cast(o->Get(String::NewSymbol("name")));
+    char friendly_name[120] = "";
+    v->WriteAscii(friendly_name, 0, 100);
+    
+   int port = 0;
+    PLT_UPnP upnp;
+    PLT_DeviceHostReference device(
+        new V8MediaServer(
+            "..", 
+            o,
+            friendly_name?friendly_name:"V8 Media Server",
+            false,
+            "SAMEDEVICEGUID", // NULL for random ID
+            (NPT_UInt16)port)
+            );
+
+    NPT_List<NPT_IpAddress> list;
+    PLT_UPnPMessageHelper::GetIPAddresses(list);
+    NPT_String ip = list.GetFirstItem()->ToString();
+
+    device->m_ModelDescription = "V8 Media Server";
+    device->m_ModelURL = "http://media_server.com/";
+    device->m_ModelNumber = "1.0";
+    device->m_ModelName = "Platinum File Media Server";
+    device->m_Manufacturer = "Plutinosoft";
+    device->m_ManufacturerURL = "http://www.plutinosoft.com/";
+
+    upnp.AddDevice(device);
+    NPT_String uuid = device->GetUUID();
+
+    upnp.Start();
+    //NPT_LOG_INFO("Press 'q' to quit.");
+
+    char buf[256];
+    while (gets(buf)) {
+        if (*buf == 'q')
+            break;
+    }
+
+    upnp.Stop();
+
+
+  return scope.Close(Undefined());
+}
+extern "C" {
+
+void init(Handle<Object> exports, Handle<Object> module) {
+  module->Set(String::NewSymbol("exports"),
+      FunctionTemplate::New(RunCallback)->GetFunction());
+}
+
 
   NODE_MODULE(media_watcher, init);
 }

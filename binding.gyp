@@ -2,7 +2,7 @@
   "targets": [
     {
       "target_name": "media_watcher",
-      "sources": [ "media_watcher.cc" ],
+      "sources": [ "media_watcher.cc", "V8MediaServer.cpp" ],
       'link_settings': {
         'libraries': [
               '../libZlib.a','../libMicro.a','../libPlatinum.a','../libNeptune.a','-lpthread','../libPltMediaRenderer.a','../libPltMediaConnect.a','../libPltMediaServer.a','../libaxTLS.a'
@@ -10,6 +10,7 @@
       },
       'include_dirs': [
           '/',
+          '.',
           '../',
           './node_modules/Platinum/Platinum/Source/Platinum',
           './node_modules/Platinum/Platinum/Source/Core', 
