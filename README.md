@@ -1,4 +1,4 @@
-mediaWatcher
+mediaServer
 ============
 
 nodejs platinum module
